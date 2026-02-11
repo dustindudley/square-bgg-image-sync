@@ -9,7 +9,8 @@
  *   EXCLUDE_CATEGORY_IDS  – comma-separated category IDs to skip (e.g. Drinks, Shirts)
  */
 
-import { Client, Environment } from "square";
+import { Client, Environment, FileWrapper } from "square";
+import { Readable } from "stream";
 
 // ---------------------------------------------------------------------------
 // Client singleton
@@ -161,8 +162,13 @@ export async function uploadImageToSquareItem(
   const buffer = Buffer.from(arrayBuffer);
 
   // 2. Build the multipart request
-  //    Square's createCatalogImage expects a File/Blob + request JSON
-  const blob = new Blob([buffer], { type: "image/jpeg" });
+  //    Square's Node SDK requires a FileWrapper (from @apimatic/core)
+  //    wrapping a Node Readable stream – a plain Blob won't carry auth.
+  const readable = Readable.from(buffer);
+  const file = new FileWrapper(readable, {
+    contentType: "image/jpeg",
+    filename: `${imageName.replace(/[^a-zA-Z0-9_-]/g, "_")}.jpg`,
+  });
 
   const { result } = await client.catalogApi.createCatalogImage(
     {
@@ -177,7 +183,7 @@ export async function uploadImageToSquareItem(
         },
       },
     },
-    blob as any
+    file
   );
 
   const imageObjectId = result.image?.id;
