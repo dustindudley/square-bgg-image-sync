@@ -10,6 +10,7 @@
  */
 
 import { XMLParser } from "fast-xml-parser";
+import { lookupUpc } from "./upc";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,24 +156,72 @@ export async function fetchBggThing(bggId: number): Promise<BggThingDetail | nul
 /**
  * Given a product name (and optional year / publisher from Square metadata),
  * search BGG and return the best-matching thing detail, or null.
+ *
+ * Strategy:
+ *   1. If a UPC is provided, look it up to get the full product title
+ *      and search BGG with that instead of the (possibly abbreviated) Square name.
+ *   2. Score results by name similarity and year match.
+ *   3. Verify publisher if a hint is available.
+ *   4. If UPC-based search fails, fall back to the Square product name.
  */
 export async function findBestMatch(
   productName: string,
   hints?: { year?: number; publisher?: string; upc?: string }
 ): Promise<BggThingDetail | null> {
-  // 1. Search by name
-  const results = await searchBgg(productName);
+  // -------------------------------------------------------------------
+  // 1. If UPC available, resolve it to a full product name first
+  // -------------------------------------------------------------------
+  let searchName = productName;
+
+  if (hints?.upc) {
+    console.log(`[BGG] UPC available (${hints.upc}), looking up full title…`);
+    const upcResult = await lookupUpc(hints.upc);
+    if (upcResult?.title) {
+      // Clean up the UPC title – remove common suffixes like "Board Game", edition info, etc.
+      const cleanTitle = upcResult.title
+        .replace(/\s*\(.*?\)\s*/g, " ")       // remove parenthetical text
+        .replace(/\s*-\s*board game\s*/i, "")  // remove "- Board Game"
+        .replace(/\s*board game\s*/i, "")      // remove "Board Game"
+        .trim();
+
+      console.log(`[BGG] UPC resolved: "${hints.upc}" → "${cleanTitle}" (brand: ${upcResult.brand ?? "n/a"})`);
+      searchName = cleanTitle;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 2. Search BGG (try UPC-resolved name, then fall back to Square name)
+  // -------------------------------------------------------------------
+  let match = await searchAndScore(searchName, hints);
+
+  // If UPC-resolved name didn't work and it differs from the Square name, try the original
+  if (!match && searchName !== productName) {
+    console.log(`[BGG] UPC-based search for "${searchName}" failed, falling back to Square name "${productName}"`);
+    match = await searchAndScore(productName, hints);
+  }
+
+  return match;
+}
+
+/**
+ * Internal: search BGG by name, score results, verify publisher, return best match.
+ */
+async function searchAndScore(
+  searchName: string,
+  hints?: { year?: number; publisher?: string }
+): Promise<BggThingDetail | null> {
+  const results = await searchBgg(searchName);
   if (results.length === 0) return null;
 
-  // 2. Score each result
+  // Score each result
   type Scored = BggSearchResult & { score: number };
   const scored: Scored[] = results.map((r) => {
     let score = 0;
 
     // Exact-ish name match (case-insensitive)
-    if (r.name.toLowerCase() === productName.toLowerCase()) {
+    if (r.name.toLowerCase() === searchName.toLowerCase()) {
       score += 10;
-    } else if (r.name.toLowerCase().includes(productName.toLowerCase())) {
+    } else if (r.name.toLowerCase().includes(searchName.toLowerCase())) {
       score += 5;
     }
 
@@ -187,7 +236,7 @@ export async function findBestMatch(
   // Sort descending by score, then prefer lower BGG id (older = more canonical)
   scored.sort((a, b) => b.score - a.score || a.bggId - b.bggId);
 
-  // 3. Fetch full details for top candidate(s) and verify publisher if we have a hint
+  // Fetch full details for top candidate(s) and verify publisher if we have a hint
   for (const candidate of scored.slice(0, 3)) {
     const detail = await fetchBggThing(candidate.bggId);
     if (!detail || !detail.imageUrl) continue;
