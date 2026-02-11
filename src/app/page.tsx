@@ -31,7 +31,9 @@ export default function Home() {
         setMessage(data.message);
       } else {
         setStatus("error");
-        setMessage(data.error ?? "Unknown error");
+        setMessage(
+          data.error + (data.hint ? `\n\n💡 ${data.hint}` : "")
+        );
       }
     } catch (err: any) {
       setStatus("error");
@@ -228,6 +230,49 @@ export default function Home() {
           </a>
           .
         </p>
+        <hr style={{ border: "none", borderTop: "1px solid #334155", margin: "1rem 0" }} />
+        <h3
+          style={{
+            margin: "0 0 0.75rem",
+            color: "#e2e8f0",
+            fontSize: "0.95rem",
+          }}
+        >
+          ⚠️ First-time setup: Sync your app with Inngest
+        </h3>
+        <p style={{ margin: "0 0 0.5rem" }}>
+          Before the sync button works, Inngest must discover your functions.
+          Do <strong>one</strong> of the following:
+        </p>
+        <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+          <li>
+            <strong>Recommended:</strong> Install the{" "}
+            <a
+              href="https://vercel.com/integrations/inngest"
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "#60a5fa" }}
+            >
+              Inngest Vercel Integration
+            </a>{" "}
+            — it auto-syncs on every deploy.
+          </li>
+          <li>
+            <strong>Manual:</strong> In{" "}
+            <a
+              href="https://app.inngest.com"
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "#60a5fa" }}
+            >
+              app.inngest.com
+            </a>
+            {" → Apps → Sync New App"}, enter your URL:{" "}
+            <code style={{ color: "#60a5fa" }}>
+              https://YOUR-APP.vercel.app/api/inngest
+            </code>
+          </li>
+        </ul>
       </div>
     </main>
   );
