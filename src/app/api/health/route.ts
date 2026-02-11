@@ -13,6 +13,7 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     env: {
       hasSquareToken: !!process.env.SQUARE_ACCESS_TOKEN,
+      hasBggApiToken: !!process.env.BGG_API_TOKEN,
       hasInngestEventKey: !!process.env.INNGEST_EVENT_KEY,
       hasInngestSigningKey: !!process.env.INNGEST_SIGNING_KEY,
       squareEnvironment: process.env.SQUARE_ENVIRONMENT ?? "not set",

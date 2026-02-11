@@ -50,14 +50,30 @@ const BASE_DELAY_MS = 2_000;
 const MAX_RETRIES = 6;
 
 /**
- * BGG requires a meaningful User-Agent header on all API requests.
- * Requests without one (or with a generic one) get 401/403.
- * See: https://boardgamegeek.com/wiki/page/XML_API_Terms_of_Use
+ * Build BGG request headers.
+ *
+ * BGG now requires a registered application with a Bearer token.
+ * Register at: https://boardgamegeek.com/applications
+ * Then create a token under your app and set it as BGG_API_TOKEN.
+ *
+ * See: https://boardgamegeek.com/using_the_xml_api
  */
-const BGG_HEADERS: HeadersInit = {
-  "User-Agent": "SquareBGGImageSync/1.0 (board-game-store-image-sync)",
-  Accept: "application/xml",
-};
+function getBggHeaders(): HeadersInit {
+  const token = process.env.BGG_API_TOKEN;
+  if (!token) {
+    throw new Error(
+      "Missing BGG_API_TOKEN env var. " +
+        "Register your app at https://boardgamegeek.com/applications, " +
+        "create a token, and add it as BGG_API_TOKEN in your Vercel env vars."
+    );
+  }
+
+  return {
+    Authorization: `Bearer ${token}`,
+    "User-Agent": "SquareBGGImageSync/1.0 (board-game-store-image-sync)",
+    Accept: "application/xml",
+  };
+}
 
 /**
  * Fetch a URL with exponential back-off on 429 / 5xx responses.
@@ -70,19 +86,28 @@ async function fetchWithBackoff(
   // Small courtesy delay on every call (even the first)
   await sleep(800 + Math.random() * 400);
 
-  const res = await fetch(url, { headers: BGG_HEADERS });
+  const res = await fetch(url, { headers: getBggHeaders() });
 
   if (res.ok) {
     return res.text();
   }
 
-  if ((res.status === 429 || res.status === 401 || res.status === 403 || res.status >= 500) && attempt < MAX_RETRIES) {
+  // Retry on rate-limit or server errors; do NOT retry 401/403
+  // since those indicate a bad/missing token that won't self-resolve.
+  if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
     const delay = BASE_DELAY_MS * 2 ** attempt + Math.random() * 1_000;
     console.warn(
       `[BGG] ${res.status} on ${url} – retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
     );
     await sleep(delay);
     return fetchWithBackoff(url, attempt + 1);
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      `[BGG] Auth failed (${res.status}). Your BGG_API_TOKEN may be invalid or your app may not be approved yet. ` +
+        `Check https://boardgamegeek.com/applications – ${url}`
+    );
   }
 
   throw new Error(`[BGG] Request failed: ${res.status} ${res.statusText} – ${url}`);
