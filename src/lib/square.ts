@@ -4,9 +4,6 @@
  * Required env vars:
  *   SQUARE_ACCESS_TOKEN   – your Square OAuth / personal access token
  *   SQUARE_ENVIRONMENT    – "sandbox" | "production"
- *
- * Optional env var:
- *   EXCLUDE_CATEGORY_IDS  – comma-separated category IDs to skip (e.g. Drinks, Shirts)
  */
 
 import { Client, Environment, FileWrapper } from "square";
@@ -55,79 +52,118 @@ export interface SquareCatalogItem {
 }
 
 // ---------------------------------------------------------------------------
-// List all catalog items (paginated)
+// Category discovery
+// ---------------------------------------------------------------------------
+
+/** Keywords that identify board / card game categories (case-insensitive). */
+const GAME_CATEGORY_KEYWORDS = [
+  "board game",
+  "card game",
+  "board games",
+  "card games",
+  "tabletop",
+  "games",
+];
+
+/**
+ * Fetch all CATEGORY objects from Square and return a Map of id → name
+ * for categories whose name matches board / card game keywords.
+ */
+async function fetchGameCategoryIds(): Promise<Map<string, string>> {
+  const client = getSquareClient();
+  const gameCategories = new Map<string, string>();
+  let cursor: string | undefined;
+
+  do {
+    const { result } = await client.catalogApi.listCatalog(cursor, "CATEGORY");
+
+    for (const obj of result.objects ?? []) {
+      const name = obj.categoryData?.name ?? "";
+      const nameLower = name.toLowerCase();
+
+      if (GAME_CATEGORY_KEYWORDS.some((kw) => nameLower.includes(kw))) {
+        gameCategories.set(obj.id!, name);
+      }
+    }
+
+    cursor = result.cursor ?? undefined;
+  } while (cursor);
+
+  return gameCategories;
+}
+
+// ---------------------------------------------------------------------------
+// List catalog items (board & card games with UPCs only)
 // ---------------------------------------------------------------------------
 
 /**
- * Retrieve every ITEM object from the Square catalog, automatically
- * paginating through the full list.  Items whose category matches
- * an excluded ID are filtered out.
+ * Retrieve catalog items that belong to board / card game categories
+ * AND have a UPC barcode. Items without a UPC are skipped since we
+ * rely on the barcode for accurate BGG lookups.
  */
 export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
   const client = getSquareClient();
-  const excludeIds = (process.env.EXCLUDE_CATEGORY_IDS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
 
+  // 1. Discover which category IDs are board / card game categories
+  const gameCats = await fetchGameCategoryIds();
+  console.log(
+    `[Square] Found ${gameCats.size} game categories: ${[...gameCats.values()].join(", ") || "(none)"}`
+  );
+
+  if (gameCats.size === 0) {
+    console.warn(
+      "[Square] No board/card game categories found. " +
+        "Make sure your Square catalog has categories with names containing: " +
+        GAME_CATEGORY_KEYWORDS.join(", ")
+    );
+    return [];
+  }
+
+  // 2. Paginate through all ITEM objects
   const items: SquareCatalogItem[] = [];
   let cursor: string | undefined;
 
   do {
-    const { result } = await client.catalogApi.listCatalog(
-      cursor,
-      "ITEM"
-    );
+    const { result } = await client.catalogApi.listCatalog(cursor, "ITEM");
 
     for (const obj of result.objects ?? []) {
       const itemData = obj.itemData;
       if (!itemData) continue;
 
-      // Filter by excluded categories
-      const catIds = (itemData.categoryId ? [itemData.categoryId] : []) as string[];
-
-      // Also check reportingCategory and categories array (newer SDK)
+      // Collect all category IDs for this item
+      const catIds: string[] = [];
+      if (itemData.categoryId) catIds.push(itemData.categoryId);
       if ((itemData as any).categories) {
         for (const c of (itemData as any).categories) {
           if (c.id) catIds.push(c.id);
         }
       }
 
-      // Check category name-based exclusion (fallback: skip items whose
-      // name contains "Drink" or "Shirt" if no EXCLUDE_CATEGORY_IDS set)
-      const nameLower = (itemData.name ?? "").toLowerCase();
-      if (excludeIds.length === 0) {
-        if (
-          nameLower.includes("drink") ||
-          nameLower.includes("shirt")
-        ) {
-          continue;
-        }
-      } else {
-        if (catIds.some((id) => excludeIds.includes(id))) continue;
-      }
+      // Only include items in a game category
+      const isGame = catIds.some((id) => gameCats.has(id));
+      if (!isGame) continue;
 
-      // Check for existing images
-      const hasImage =
-        (obj.itemData?.imageIds?.length ?? 0) > 0;
-
-      // Extract useful metadata from custom attribute values or description
-      const meta: SquareCatalogItem["meta"] = {};
-
-      // Try to find UPC in variations
+      // Only include items that have a UPC barcode
+      let upc: string | undefined;
       for (const variation of itemData.variations ?? []) {
-        const upc = variation.itemVariationData?.upc;
-        if (upc) {
-          meta.upc = upc;
+        const varUpc = variation.itemVariationData?.upc;
+        if (varUpc) {
+          upc = varUpc;
           break;
         }
       }
+      if (!upc) {
+        console.log(`[Square] Skipping "${itemData.name}" – no UPC barcode`);
+        continue;
+      }
+
+      const hasImage = (obj.itemData?.imageIds?.length ?? 0) > 0;
 
       items.push({
         objectId: obj.id!,
         name: itemData.name ?? "",
         hasImage,
-        meta,
+        meta: { upc },
         categoryIds: catIds,
       });
     }
@@ -135,6 +171,7 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
     cursor = result.cursor ?? undefined;
   } while (cursor);
 
+  console.log(`[Square] ${items.length} game items with UPCs found`);
   return items;
 }
 
