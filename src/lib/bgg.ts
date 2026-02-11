@@ -50,6 +50,16 @@ const BASE_DELAY_MS = 2_000;
 const MAX_RETRIES = 6;
 
 /**
+ * BGG requires a meaningful User-Agent header on all API requests.
+ * Requests without one (or with a generic one) get 401/403.
+ * See: https://boardgamegeek.com/wiki/page/XML_API_Terms_of_Use
+ */
+const BGG_HEADERS: HeadersInit = {
+  "User-Agent": "SquareBGGImageSync/1.0 (board-game-store-image-sync)",
+  Accept: "application/xml",
+};
+
+/**
  * Fetch a URL with exponential back-off on 429 / 5xx responses.
  * Adds a small base delay between every request to be kind to BGG.
  */
@@ -60,13 +70,13 @@ async function fetchWithBackoff(
   // Small courtesy delay on every call (even the first)
   await sleep(800 + Math.random() * 400);
 
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: BGG_HEADERS });
 
   if (res.ok) {
     return res.text();
   }
 
-  if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
+  if ((res.status === 429 || res.status === 401 || res.status === 403 || res.status >= 500) && attempt < MAX_RETRIES) {
     const delay = BASE_DELAY_MS * 2 ** attempt + Math.random() * 1_000;
     console.warn(
       `[BGG] ${res.status} on ${url} – retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${MAX_RETRIES})`
