@@ -1,6 +1,6 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/inngest/client";
-import { syncImages } from "@/inngest/functions/sync-images";
+import { syncImages, syncSingleItem } from "@/inngest/functions/sync-images";
 
 /**
  * Inngest HTTP handler.
@@ -12,7 +12,7 @@ import { syncImages } from "@/inngest/functions/sync-images";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [syncImages],
+  functions: [syncImages, syncSingleItem],
   servePath: "/api/inngest",
 });
 
