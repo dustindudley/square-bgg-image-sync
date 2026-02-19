@@ -26,6 +26,7 @@ const GAME_CATEGORY_KEYWORDS = [
   "board games",
   "card games",
   "tabletop",
+  "table top",
   "games",
 ];
 

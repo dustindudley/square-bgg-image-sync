@@ -62,6 +62,7 @@ const GAME_CATEGORY_KEYWORDS = [
   "board games",
   "card games",
   "tabletop",
+  "table top",
   "games",
 ];
 
@@ -97,9 +98,9 @@ async function fetchGameCategoryIds(): Promise<Map<string, string>> {
 // ---------------------------------------------------------------------------
 
 /**
- * Retrieve catalog items that belong to board / card game categories
- * AND have a UPC barcode. Items without a UPC are skipped since we
- * rely on the barcode for accurate BGG lookups.
+ * Retrieve catalog items that belong to board / card game categories.
+ * If an item has a UPC barcode it will be used for more accurate BGG
+ * matching, but items without a UPC are still included (name-based search).
  */
 export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
   const client = getSquareClient();
@@ -122,6 +123,8 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
   // 2. Paginate through all ITEM objects
   const items: SquareCatalogItem[] = [];
   let cursor: string | undefined;
+  let withUpc = 0;
+  let withoutUpc = 0;
 
   do {
     const { result } = await client.catalogApi.listCatalog(cursor, "ITEM");
@@ -143,7 +146,7 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
       const isGame = catIds.some((id) => gameCats.has(id));
       if (!isGame) continue;
 
-      // Only include items that have a UPC barcode
+      // Try to extract a UPC from any variation (optional — helps matching)
       let upc: string | undefined;
       for (const variation of itemData.variations ?? []) {
         const varUpc = variation.itemVariationData?.upc;
@@ -152,9 +155,11 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
           break;
         }
       }
-      if (!upc) {
-        console.log(`[Square] Skipping "${itemData.name}" – no UPC barcode`);
-        continue;
+
+      if (upc) {
+        withUpc++;
+      } else {
+        withoutUpc++;
       }
 
       const hasImage = (obj.itemData?.imageIds?.length ?? 0) > 0;
@@ -171,7 +176,9 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
     cursor = result.cursor ?? undefined;
   } while (cursor);
 
-  console.log(`[Square] ${items.length} game items with UPCs found`);
+  console.log(
+    `[Square] ${items.length} game items found (${withUpc} with UPC, ${withoutUpc} name-only)`
+  );
   return items;
 }
 
