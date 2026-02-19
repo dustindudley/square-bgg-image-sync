@@ -29,6 +29,8 @@ export interface BggThingDetail {
   imageUrl: string | null;
   thumbnailUrl: string | null;
   publishers: string[];
+  /** HTML-safe description from BGG (decoded from XML entities). */
+  description: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +174,14 @@ export async function fetchBggThing(bggId: number): Promise<BggThingDetail | nul
     .filter((l: any) => l["@_type"] === "boardgamepublisher")
     .map((l: any) => l["@_value"] as string);
 
+  // BGG descriptions are XML-encoded strings containing &#10; for newlines
+  // and HTML entities. Decode them into clean HTML paragraphs.
+  const rawDesc: string | undefined = item.description;
+  let description: string | null = null;
+  if (rawDesc && typeof rawDesc === "string" && rawDesc.trim().length > 0) {
+    description = decodeBggDescription(rawDesc);
+  }
+
   return {
     bggId,
     name: primary?.["@_value"] ?? "",
@@ -181,6 +191,7 @@ export async function fetchBggThing(bggId: number): Promise<BggThingDetail | nul
     imageUrl: item.image ?? null,
     thumbnailUrl: item.thumbnail ?? null,
     publishers,
+    description,
   };
 }
 
@@ -295,5 +306,41 @@ async function searchAndScore(
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Description decoder
+// ---------------------------------------------------------------------------
+
+/**
+ * BGG descriptions come as XML-encoded strings with &#10; line breaks and
+ * raw HTML entities. This decodes them into clean HTML suitable for
+ * Square's `descriptionHtml` field.
+ */
+function decodeBggDescription(raw: string): string {
+  let text = raw;
+
+  // Decode common XML/HTML entities
+  text = text
+    .replace(/&#10;/g, "\n")
+    .replace(/&#13;/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&nbsp;/g, " ");
+
+  // Convert double-newlines to paragraph breaks, single newlines to <br>
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`);
+
+  return paragraphs.join("\n");
 }
 

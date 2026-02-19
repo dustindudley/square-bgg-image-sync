@@ -41,6 +41,8 @@ export interface SquareCatalogItem {
   name: string;
   /** Whether the item already has at least one image attached */
   hasImage: boolean;
+  /** Whether the item already has a description */
+  hasDescription: boolean;
   /** Optional metadata extracted from custom attributes */
   meta: {
     year?: number;
@@ -163,11 +165,14 @@ export async function listCatalogItems(): Promise<SquareCatalogItem[]> {
       }
 
       const hasImage = (obj.itemData?.imageIds?.length ?? 0) > 0;
+      const desc = itemData.descriptionHtml ?? itemData.description ?? "";
+      const hasDescription = desc.trim().length > 0;
 
       items.push({
         objectId: obj.id!,
         name: itemData.name ?? "",
         hasImage,
+        hasDescription,
         meta: { upc },
         categoryIds: catIds,
       });
@@ -234,5 +239,45 @@ export async function uploadImageToSquareItem(
   if (!imageObjectId) throw new Error("Square did not return an image ID");
 
   return { imageObjectId };
+}
+
+// ---------------------------------------------------------------------------
+// Update item description
+// ---------------------------------------------------------------------------
+
+/**
+ * Update the description of a Square catalog item using HTML.
+ *
+ * Retrieves the current object first (to get `version`), then upserts
+ * with the updated `descriptionHtml` field.
+ */
+export async function updateItemDescription(
+  catalogObjectId: string,
+  descriptionHtml: string
+): Promise<void> {
+  const client = getSquareClient();
+
+  // 1. Retrieve the current catalog object (need its `version`)
+  const { result: getResult } = await client.catalogApi.retrieveCatalogObject(
+    catalogObjectId
+  );
+  const existing = getResult.object;
+  if (!existing) {
+    throw new Error(`[Square] Could not retrieve object ${catalogObjectId}`);
+  }
+
+  // 2. Upsert with updated description
+  await client.catalogApi.upsertCatalogObject({
+    idempotencyKey: `bgg-desc-${catalogObjectId}-${Date.now()}`,
+    object: {
+      type: "ITEM",
+      id: catalogObjectId,
+      version: existing.version,
+      itemData: {
+        ...existing.itemData,
+        descriptionHtml,
+      },
+    },
+  });
 }
 

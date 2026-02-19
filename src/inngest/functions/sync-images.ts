@@ -15,7 +15,7 @@
  */
 
 import { inngest } from "../client";
-import { listCatalogItems, uploadImageToSquareItem, SquareCatalogItem } from "../../lib/square";
+import { listCatalogItems, uploadImageToSquareItem, updateItemDescription, SquareCatalogItem } from "../../lib/square";
 import { findBestMatch } from "../../lib/bgg";
 
 // ---------------------------------------------------------------------------
@@ -64,10 +64,10 @@ export const syncImages = inngest.createFunction(
       return items;
     });
 
-    // Filter
+    // Filter – process items that are missing an image OR a description
     let items = allItems;
     if (!force) {
-      items = items.filter((i) => !i.hasImage);
+      items = items.filter((i) => !i.hasImage || !i.hasDescription);
     }
     if (filterName) {
       const lower = filterName.toLowerCase();
@@ -115,7 +115,7 @@ export const syncSingleItem = inngest.createFunction(
 
     // Step 1 – Search BGG
     const match = await step.run("search-bgg", async () => {
-      logger.info(`🔍 Searching BGG for "${item.name}" (UPC: ${item.meta.upc})…`);
+      logger.info(`🔍 Searching BGG for "${item.name}" (UPC: ${item.meta.upc ?? "none"})…`);
 
       const result = await findBestMatch(item.name, {
         year: item.meta.year,
@@ -142,26 +142,48 @@ export const syncSingleItem = inngest.createFunction(
       };
     }
 
-    // Step 2 – Upload image to Square
-    const uploadResult = await step.run("upload-to-square", async () => {
-      logger.info(`📸 Uploading image for "${item.name}" from BGG #${match.bggId}…`);
+    // Step 2 – Upload image to Square (if needed)
+    let imageObjectId: string | undefined;
+    if (!item.hasImage && match.imageUrl) {
+      const uploadResult = await step.run("upload-image-to-square", async () => {
+        logger.info(`📸 Uploading image for "${item.name}" from BGG #${match.bggId}…`);
 
-      const { imageObjectId } = await uploadImageToSquareItem(
-        item.objectId,
-        match.imageUrl!,
-        `${match.name} (BGG #${match.bggId})`
-      );
+        const { imageObjectId } = await uploadImageToSquareItem(
+          item.objectId,
+          match.imageUrl!,
+          `${match.name} (BGG #${match.bggId})`
+        );
 
-      logger.info(`✅ Uploaded image ${imageObjectId} for "${item.name}"`);
-      return { imageObjectId };
-    });
+        logger.info(`✅ Uploaded image ${imageObjectId} for "${item.name}"`);
+        return { imageObjectId };
+      });
+      imageObjectId = uploadResult.imageObjectId;
+    } else if (item.hasImage) {
+      logger.info(`⏩ Skipping image for "${item.name}" – already has one`);
+    }
+
+    // Step 3 – Update description on Square (if needed)
+    let descriptionUpdated = false;
+    if (!item.hasDescription && match.description) {
+      await step.run("update-description", async () => {
+        logger.info(`📝 Updating description for "${item.name}" from BGG #${match.bggId}…`);
+
+        await updateItemDescription(item.objectId, match.description!);
+
+        logger.info(`✅ Description updated for "${item.name}"`);
+      });
+      descriptionUpdated = true;
+    } else if (item.hasDescription) {
+      logger.info(`⏩ Skipping description for "${item.name}" – already has one`);
+    }
 
     return {
       objectId: item.objectId,
       name: item.name,
       status: "synced" as const,
       bggId: match.bggId,
-      imageObjectId: uploadResult.imageObjectId,
+      imageObjectId,
+      descriptionUpdated,
     };
   }
 );
